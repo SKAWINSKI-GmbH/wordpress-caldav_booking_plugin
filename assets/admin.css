@@ -1,0 +1,38 @@
+/* CalDAV Booking - Admin Styles */
+
+.wrap h1 {
+    margin-bottom: 1.5rem;
+}
+
+.wrap hr {
+    margin: 2rem 0;
+    border: none;
+    border-top: 1px solid #ddd;
+}
+
+.wrap code {
+    background: #f0f0f0;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+}
+
+.form-table th {
+    width: 200px;
+}
+
+.form-table input[type="url"],
+.form-table input[type="text"],
+.form-table input[type="password"] {
+    width: 400px;
+    max-width: 100%;
+}
+
+.form-table .description {
+    margin-top: 0.25rem;
+    font-style: italic;
+    color: #666;
+}
+
+.notice {
+    margin: 1rem 0;
+}

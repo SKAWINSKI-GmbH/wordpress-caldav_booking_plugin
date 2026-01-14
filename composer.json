@@ -1,0 +1,50 @@
+{
+    "name": "skawinski/caldav-booking-plugin",
+    "description": "WordPress plugin for appointment booking with CalDAV synchronization",
+    "type": "wordpress-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "SKAWINSKI GmbH",
+            "email": "info@skawinski.at",
+            "homepage": "https://skawinski.at"
+        }
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "squizlabs/php_codesniffer": "^3.7",
+        "wp-coding-standards/wpcs": "^3.0",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "scripts": {
+        "lint": "find . -name '*.php' -not -path './vendor/*' -exec php -l {} \\;",
+        "phpcs": "phpcs --standard=WordPress --extensions=php --ignore=vendor .",
+        "phpcbf": "phpcbf --standard=WordPress --extensions=php --ignore=vendor .",
+        "test": [
+            "@lint",
+            "@phpcs"
+        ]
+    },
+    "support": {
+        "issues": "https://github.com/skawinski/caldav-booking-plugin/issues",
+        "source": "https://github.com/skawinski/caldav-booking-plugin"
+    },
+    "keywords": [
+        "wordpress",
+        "plugin",
+        "caldav",
+        "booking",
+        "appointment",
+        "calendar",
+        "sogo",
+        "mailcow",
+        "nextcloud"
+    ]
+}

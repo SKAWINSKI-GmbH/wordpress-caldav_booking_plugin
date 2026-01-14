@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build artifacts
+build/
+*.zip
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+debug.log
+
+# Local config
+.env
+wp-config.php
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# PHP
+.phpcs.xml
+phpcs.xml
+.php-cs-fixer.cache
