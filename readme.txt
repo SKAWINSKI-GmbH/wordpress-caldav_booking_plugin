@@ -2,7 +2,7 @@
 Contributors: skawinski
 Tags: booking, appointment, caldav, calendar, sogo, mailcow, nextcloud
 Requires at least: 5.0
-Tested up to: 6.4
+Tested up to: 6.9
 Requires PHP: 7.4
 Stable tag: 0.2.1
 License: MIT
