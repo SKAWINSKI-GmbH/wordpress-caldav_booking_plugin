@@ -23,9 +23,20 @@
         }
         
         init() {
+            this.debug('Initializing CalDAV Booking');
             // Load meeting types via AJAX (bypasses page cache)
             this.loadMeetingTypes();
             this.bindEvents();
+        }
+
+        debug(message, data = null) {
+            if (caldavBooking.debug) {
+                if (data !== null) {
+                    console.log('[CalDAV]', message, data);
+                } else {
+                    console.log('[CalDAV]', message);
+                }
+            }
         }
         
         loadMeetingTypes() {
@@ -39,6 +50,7 @@
                     nonce: caldavBooking.nonce
                 },
                 success: function(response) {
+                    self.debug('Meeting types loaded', response.data.types);
                     if (response.success && response.data.types) {
                         self.meetingTypes = response.data.types;
                         self.renderMeetingTypes();
@@ -46,7 +58,8 @@
                         self.$container.find('.caldav-loading-types').text('Fehler beim Laden');
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
+                    self.debug('Meeting types error', { status, error });
                     self.$container.find('.caldav-loading-types').text('Verbindungsfehler');
                 }
             });
@@ -295,12 +308,14 @@
             const $slotsContainer = this.$container.find('.caldav-slots');
             const $loading = this.$container.find('.caldav-slots-loading');
             const $noSlots = this.$container.find('.caldav-no-slots');
-            
+
+            this.debug('Loading slots for', dateStr);
+
             $slotsContainer.empty();
             $loading.show();
             $noSlots.hide();
             this.hideError();
-            
+
             $.ajax({
                 url: caldavBooking.ajaxurl,
                 type: 'POST',
@@ -311,8 +326,9 @@
                     duration: this.selectedDuration || 60
                 },
                 success: function(response) {
+                    self.debug('Slots loaded', response.data.slots);
                     $loading.hide();
-                    
+
                     if (response.success && response.data.slots.length > 0) {
                         self.renderSlots(response.data.slots);
                     } else if (response.success) {
@@ -395,27 +411,50 @@
             
             $submitBtn.prop('disabled', true).html('<span class="caldav-spinner"></span> Wird gebucht...');
             this.hideError();
-            
+
+            self.debug('Submitting booking', formData);
+
             $.ajax({
                 url: caldavBooking.ajaxurl,
                 type: 'POST',
                 data: formData,
                 timeout: 60000, // 60 Sekunden Timeout
                 success: function(response) {
+                    self.debug('Booking response', response);
                     $submitBtn.prop('disabled', false).text('Termin buchen');
-                    
+
                     if (response.success) {
+                        // Debug-Logs ausgeben wenn vorhanden
+                        if (response.data.debug) {
+                            console.group('[CalDAV] Booking Debug Log');
+                            response.data.debug.forEach(function(entry) {
+                                console.log('[CalDAV]', entry.step, entry);
+                            });
+                            if (response.data.caldav_result) {
+                                console.log('[CalDAV] Result:', response.data.caldav_result);
+                            }
+                            console.groupEnd();
+                        }
+
                         let confirmHtml = `<strong>${response.data.date}</strong><br>${response.data.time}`;
                         if (response.data.type) {
                             confirmHtml += `<br><em>${response.data.type}</em>`;
                         }
-                        
+
                         // Buchungsstatus
-                        confirmHtml += `<br><small style="color:#28a745;">✓ Termin erfolgreich reserviert</small>`;
-                        
-                        // E-Mail wird asynchron gesendet
-                        confirmHtml += `<br><small style="color:#666;">📧 Bestätigung wird per E-Mail zugestellt</small>`;
-                        
+                        if (response.data.caldav_result && response.data.caldav_result.success) {
+                            confirmHtml += `<br><small style="color:#28a745;">✓ Termin erfolgreich im Kalender eingetragen</small>`;
+                        } else if (response.data.caldav_result && !response.data.caldav_result.success) {
+                            confirmHtml += `<br><small style="color:#dc3545;">✗ CalDAV Fehler: ${response.data.caldav_result.error}</small>`;
+                        } else {
+                            confirmHtml += `<br><small style="color:#28a745;">✓ Termin erfolgreich reserviert</small>`;
+                        }
+
+                        // E-Mail-Hinweis nur wenn aktiviert
+                        if (caldavBooking.emailEnabled) {
+                            confirmHtml += `<br><small style="color:#666;">📧 Bestätigung wird per E-Mail zugestellt</small>`;
+                        }
+
                         self.$container.find('.caldav-confirmation-details').html(confirmHtml);
                         self.goToStep(4);
                     } else {
@@ -423,12 +462,17 @@
                     }
                 },
                 error: function(xhr, status, error) {
+                    self.debug('Booking error', { status, error, response: xhr.responseText });
                     $submitBtn.prop('disabled', false).text('Termin buchen');
                     if (status === 'timeout') {
                         // Bei Timeout wurde die Buchung wahrscheinlich trotzdem angenommen
                         let confirmHtml = `<strong>${formData.date}</strong><br>${formData.time}`;
                         confirmHtml += `<br><small style="color:#e67e22;">⚠ Verbindung langsam - Ihr Termin wurde wahrscheinlich reserviert.</small>`;
-                        confirmHtml += `<br><small>Bitte prüfen Sie Ihr E-Mail-Postfach für eine Bestätigung.</small>`;
+                        if (caldavBooking.emailEnabled) {
+                            confirmHtml += `<br><small>Bitte prüfen Sie Ihr E-Mail-Postfach für eine Bestätigung.</small>`;
+                        } else {
+                            confirmHtml += `<br><small>Bitte prüfen Sie Ihren Kalender.</small>`;
+                        }
                         self.$container.find('.caldav-confirmation-details').html(confirmHtml);
                         self.goToStep(4);
                     } else {

@@ -3,7 +3,7 @@
  * Plugin Name: CalDAV Booking
  * Plugin URI: https://github.com/skawinski/caldav-booking-plugin
  * Description: Terminbuchung mit CalDAV-Synchronisation (SOGo/Mailcow kompatibel) - Nur explizit freigegebene Slots buchbar
- * Version: 1.0.0
+ * Version: 0.2
  * Author: SKAWINSKI GmbH
  * Author URI: https://skawinski.at
  * License: MIT
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('CALDAV_BOOKING_VERSION', '1.0.0');
+define('CALDAV_BOOKING_VERSION', '0.2');
 define('CALDAV_BOOKING_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CALDAV_BOOKING_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -52,11 +52,51 @@ class CalDAV_Booking {
         
         // Cron für asynchrone Kalender-Eintragung
         add_action('caldav_process_booking', [$this, 'process_booking_async']);
-        
+
         // Reservierte Slots bei Slot-Abfrage berücksichtigen
         add_filter('caldav_busy_slots', [$this, 'add_reserved_slots'], 10, 2);
+
+        // Cache leeren wenn Einstellungen gespeichert werden
+        add_action('update_option_caldav_booking_options', [$this, 'clear_all_caches'], 10, 0);
     }
-    
+
+    public function clear_all_caches() {
+        // Object Cache für Options leeren
+        wp_cache_delete('caldav_booking_options', 'options');
+        wp_cache_delete('alloptions', 'options');
+
+        // Alle CalDAV Event-Caches leeren (Transients)
+        global $wpdb;
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_caldav_events_%'");
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_caldav_events_%'");
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_caldav_range_%'");
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_caldav_range_%'");
+
+        // Object Cache komplett leeren falls verfügbar
+        if (function_exists('wp_cache_flush_group')) {
+            wp_cache_flush_group('options');
+        }
+    }
+
+    /**
+     * Get the timezone for calendar operations.
+     * Uses caldav_timezone setting if set, otherwise falls back to WordPress timezone.
+     */
+    private function get_calendar_timezone() {
+        $options = get_option('caldav_booking_options', []);
+        $tz_string = !empty($options['caldav_timezone']) ? $options['caldav_timezone'] : wp_timezone_string();
+        return new DateTimeZone($tz_string);
+    }
+
+    /**
+     * Get the timezone name for iCal (must be a named timezone, not offset).
+     */
+    private function get_calendar_timezone_name() {
+        $options = get_option('caldav_booking_options', []);
+        $tz_string = !empty($options['caldav_timezone']) ? $options['caldav_timezone'] : wp_timezone_string();
+        return $tz_string;
+    }
+
     public function add_admin_menu() {
         add_options_page(
             'CalDAV Booking Einstellungen',
@@ -84,6 +124,7 @@ class CalDAV_Booking {
         add_settings_field('caldav_username', 'Benutzername', [$this, 'field_caldav_username'], 'caldav-booking', 'caldav_connection');
         add_settings_field('caldav_password', 'Passwort', [$this, 'field_caldav_password'], 'caldav-booking', 'caldav_connection');
         add_settings_field('caldav_calendar', 'Kalender-Pfad', [$this, 'field_caldav_calendar'], 'caldav-booking', 'caldav_connection');
+        add_settings_field('caldav_timezone', 'Kalender-Zeitzone', [$this, 'field_caldav_timezone'], 'caldav-booking', 'caldav_connection');
         
         // Availability Section
         add_settings_section(
@@ -117,7 +158,12 @@ class CalDAV_Booking {
         add_settings_field('booking_days_ahead', 'Tage im Voraus', [$this, 'field_days_ahead'], 'caldav-booking', 'caldav_booking_settings_section');
         add_settings_field('slot_buffer', 'Puffer zwischen Terminen (Min)', [$this, 'field_slot_buffer'], 'caldav-booking', 'caldav_booking_settings_section');
         add_settings_field('min_notice', 'Mindestvorlauf (Stunden)', [$this, 'field_min_notice'], 'caldav-booking', 'caldav_booking_settings_section');
-        
+        add_settings_field('required_fields', 'Pflichtfelder', [$this, 'field_required_fields'], 'caldav-booking', 'caldav_booking_settings_section');
+        add_settings_field('submit_button_id', 'Submit-Button ID (Analytics)', [$this, 'field_submit_button_id'], 'caldav-booking', 'caldav_booking_settings_section');
+        add_settings_field('rate_limit_ip', 'Rate-Limit pro IP', [$this, 'field_rate_limit_ip'], 'caldav-booking', 'caldav_booking_settings_section');
+        add_settings_field('rate_limit_global', 'Globales Rate-Limit', [$this, 'field_rate_limit_global'], 'caldav-booking', 'caldav_booking_settings_section');
+        add_settings_field('async_processing', 'Asynchrone Verarbeitung', [$this, 'field_async_processing'], 'caldav-booking', 'caldav_booking_settings_section');
+
         // Custom CSS Section
         add_settings_section(
             'caldav_custom_css',
@@ -139,7 +185,8 @@ class CalDAV_Booking {
         add_settings_field('email_customer', 'Kunden-Bestätigung', [$this, 'field_email_customer'], 'caldav-booking', 'caldav_email_settings');
         add_settings_field('email_admin', 'Admin-Benachrichtigung', [$this, 'field_email_admin'], 'caldav-booking', 'caldav_email_settings');
         add_settings_field('email_debug', 'E-Mail Debug-Modus', [$this, 'field_email_debug'], 'caldav-booking', 'caldav_email_settings');
-        
+        add_settings_field('console_debug', 'Console Debug-Modus', [$this, 'field_console_debug'], 'caldav-booking', 'caldav_email_settings');
+
         // Email Templates Section
         add_settings_section(
             'caldav_email_templates',
@@ -162,6 +209,7 @@ class CalDAV_Booking {
         $sanitized['caldav_username'] = sanitize_text_field($input['caldav_username'] ?? '');
         $sanitized['caldav_password'] = $input['caldav_password'] ?? '';
         $sanitized['caldav_calendar'] = sanitize_text_field($input['caldav_calendar'] ?? '');
+        $sanitized['caldav_timezone'] = sanitize_text_field($input['caldav_timezone'] ?? '');
         
         // Availability
         $sanitized['availability_keyword'] = sanitize_text_field($input['availability_keyword'] ?? 'VERFÜGBAR');
@@ -195,7 +243,20 @@ class CalDAV_Booking {
         $sanitized['booking_days_ahead'] = absint($input['booking_days_ahead'] ?? 14);
         $sanitized['slot_buffer'] = absint($input['slot_buffer'] ?? 15);
         $sanitized['min_notice'] = absint($input['min_notice'] ?? 2);
-        
+        $sanitized['submit_button_id'] = sanitize_html_class($input['submit_button_id'] ?? '');
+        $sanitized['rate_limit_ip'] = absint($input['rate_limit_ip'] ?? 5);
+        $sanitized['rate_limit_global'] = absint($input['rate_limit_global'] ?? 50);
+
+        // Required fields (name is always required)
+        $allowed_fields = ['email', 'phone', 'message'];
+        $required = isset($input['required_fields']) && is_array($input['required_fields'])
+            ? array_intersect($input['required_fields'], $allowed_fields)
+            : ['email'];
+        $sanitized['required_fields'] = array_values($required);
+
+        // Async processing
+        $sanitized['async_processing'] = isset($input['async_processing']) ? 1 : 0;
+
         // Custom CSS - strip tags but allow CSS
         $sanitized['custom_css'] = wp_strip_all_tags($input['custom_css'] ?? '');
         
@@ -203,7 +264,16 @@ class CalDAV_Booking {
         $sanitized['email_customer'] = isset($input['email_customer']) ? 1 : 0;
         $sanitized['email_admin'] = isset($input['email_admin']) ? 1 : 0;
         $sanitized['email_debug'] = isset($input['email_debug']) ? 1 : 0;
-        
+        $sanitized['console_debug'] = isset($input['console_debug']) ? 1 : 0;
+
+        // Cleanup debug log when debug mode is disabled
+        if (!$sanitized['console_debug']) {
+            $log_file = WP_CONTENT_DIR . '/caldav-debug.log';
+            if (file_exists($log_file)) {
+                @unlink($log_file);
+            }
+        }
+
         // Email Templates
         $sanitized['email_subject_customer'] = sanitize_text_field($input['email_subject_customer'] ?? '');
         $sanitized['email_body_customer'] = sanitize_textarea_field($input['email_body_customer'] ?? '');
@@ -259,7 +329,37 @@ class CalDAV_Booking {
         echo '<input type="text" name="caldav_booking_options[caldav_calendar]" value="' . esc_attr($value) . '" class="regular-text" />';
         echo '<p class="description">Pfad zum Kalender (z.B. Calendar/personal/)</p>';
     }
-    
+
+    public function field_caldav_timezone() {
+        $options = get_option('caldav_booking_options', []);
+        $value = $options['caldav_timezone'] ?? '';
+        $wp_tz = wp_timezone_string();
+
+        // Common European timezones
+        $timezones = [
+            '' => 'WordPress-Zeitzone verwenden (' . esc_html($wp_tz) . ')',
+            'Europe/Vienna' => 'Europe/Vienna (Österreich)',
+            'Europe/Berlin' => 'Europe/Berlin (Deutschland)',
+            'Europe/Zurich' => 'Europe/Zurich (Schweiz)',
+            'Europe/London' => 'Europe/London (UK)',
+            'Europe/Paris' => 'Europe/Paris (Frankreich)',
+            'Europe/Amsterdam' => 'Europe/Amsterdam (Niederlande)',
+            'Europe/Rome' => 'Europe/Rome (Italien)',
+            'Europe/Madrid' => 'Europe/Madrid (Spanien)',
+            'Europe/Warsaw' => 'Europe/Warsaw (Polen)',
+            'Europe/Prague' => 'Europe/Prague (Tschechien)',
+            'UTC' => 'UTC',
+        ];
+
+        echo '<select name="caldav_booking_options[caldav_timezone]">';
+        foreach ($timezones as $tz => $label) {
+            $selected = ($value === $tz) ? ' selected' : '';
+            echo '<option value="' . esc_attr($tz) . '"' . $selected . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="description">Zeitzone für Kalendereinträge (falls abweichend von WordPress)</p>';
+    }
+
     public function field_availability_keyword() {
         $options = get_option('caldav_booking_options', []);
         $value = $options['availability_keyword'] ?? 'VERFÜGBAR';
@@ -364,7 +464,66 @@ class CalDAV_Booking {
         echo '<input type="number" name="caldav_booking_options[min_notice]" value="' . esc_attr($value) . '" min="0" max="72" /> Stunden';
         echo '<p class="description">Mindestens X Stunden im Voraus buchbar</p>';
     }
-    
+
+    public function field_submit_button_id() {
+        $options = get_option('caldav_booking_options', []);
+        $value = $options['submit_button_id'] ?? '';
+        echo '<input type="text" name="caldav_booking_options[submit_button_id]" value="' . esc_attr($value) . '" placeholder="z.B. booking-submit-btn" />';
+        echo '<p class="description">ID-Attribut für den "Termin buchen"-Button</p>';
+    }
+
+    public function field_rate_limit_ip() {
+        $options = get_option('caldav_booking_options', []);
+        $value = $options['rate_limit_ip'] ?? 5;
+        echo '<input type="number" name="caldav_booking_options[rate_limit_ip]" value="' . esc_attr($value) . '" min="1" max="100" /> pro Stunde';
+        echo '<p class="description">Max. Buchungen pro IP-Adresse pro Stunde</p>';
+    }
+
+    public function field_rate_limit_global() {
+        $options = get_option('caldav_booking_options', []);
+        $value = $options['rate_limit_global'] ?? 50;
+        echo '<input type="number" name="caldav_booking_options[rate_limit_global]" value="' . esc_attr($value) . '" min="1" max="1000" /> pro Stunde';
+        echo '<p class="description">Max. Buchungen gesamt pro Stunde (Schutz gegen verteilte Angriffe)</p>';
+    }
+
+    public function field_required_fields() {
+        $options = get_option('caldav_booking_options', []);
+        $required = $options['required_fields'] ?? ['email'];
+
+        $fields = [
+            'email' => 'E-Mail',
+            'phone' => 'Telefon',
+            'message' => 'Nachricht'
+        ];
+
+        echo '<fieldset>';
+        echo '<label style="display:block;margin-bottom:5px;color:#666;"><input type="checkbox" disabled checked /> Name (immer Pflicht)</label>';
+        foreach ($fields as $key => $label) {
+            $checked = in_array($key, $required) ? 'checked' : '';
+            echo '<label style="display:block;margin-bottom:5px;">';
+            echo '<input type="checkbox" name="caldav_booking_options[required_fields][]" value="' . esc_attr($key) . '" ' . $checked . ' /> ';
+            echo esc_html($label);
+            echo '</label>';
+        }
+        echo '</fieldset>';
+        echo '<p class="description">Wähle welche Felder Pflichtfelder sein sollen</p>';
+    }
+
+    public function field_async_processing() {
+        $options = get_option('caldav_booking_options', []);
+        $checked = !empty($options['async_processing']) ? 'checked' : '';
+        $debug_on = !empty($options['console_debug']);
+
+        echo '<label>';
+        echo '<input type="checkbox" name="caldav_booking_options[async_processing]" value="1" ' . $checked . ' /> ';
+        echo 'E-Mail und CalDAV asynchron verarbeiten';
+        echo '</label>';
+        echo '<p class="description">Wenn aktiv: Antwort wird sofort gesendet, E-Mail/CalDAV im Hintergrund verarbeitet.</p>';
+        if ($debug_on) {
+            echo '<p class="description" style="color:#d63638;"><strong>Hinweis:</strong> Debug-Modus ist aktiv - Verarbeitung erfolgt immer synchron!</p>';
+        }
+    }
+
     public function section_custom_css_callback() {
         echo '<p>Eigenes CSS um das Buchungsformular an dein Theme anzupassen.</p>';
     }
@@ -444,7 +603,15 @@ class CalDAV_Booking {
             echo '</pre></div>';
         }
     }
-    
+
+    public function field_console_debug() {
+        $options = get_option('caldav_booking_options', []);
+        $checked = $options['console_debug'] ?? 0;
+        echo '<label><input type="checkbox" name="caldav_booking_options[console_debug]" value="1" ' . checked($checked, 1, false) . ' /> ';
+        echo 'Debug-Ausgaben in Browser-Konsole</label>';
+        echo '<p class="description">Zeigt Debug-Meldungen in der Browser-Entwicklerkonsole (F12)</p>';
+    }
+
     public function section_email_templates_callback() {
         echo '<p>Passen Sie die E-Mail-Texte an. Verfügbare Platzhalter:</p>';
         echo '<code>{name}</code> Kundenname, ';
@@ -647,7 +814,9 @@ NACHRICHT
         wp_localize_script('caldav-booking', 'caldavBooking', [
             'ajaxurl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('caldav_booking_nonce'),
-            'meetingTypes' => $options['meeting_types'] ?? []
+            'meetingTypes' => $options['meeting_types'] ?? [],
+            'debug' => !empty($options['console_debug']),
+            'emailEnabled' => !empty($options['email_customer'])
         ]);
     }
     
@@ -728,6 +897,12 @@ NACHRICHT
                 
                 <div class="caldav-step" data-step="3">
                     <h4 class="caldav-step-title-contact">4. Kontaktdaten</h4>
+                    <?php
+                    $required_fields = $options['required_fields'] ?? ['email'];
+                    $email_required = in_array('email', $required_fields);
+                    $phone_required = in_array('phone', $required_fields);
+                    $message_required = in_array('message', $required_fields);
+                    ?>
                     <form class="caldav-booking-form">
                         <!-- Honeypot - hidden from humans, bots will fill it -->
                         <div style="position:absolute;left:-9999px;" aria-hidden="true">
@@ -739,21 +914,21 @@ NACHRICHT
                             <input type="text" id="caldav-name" name="name" required />
                         </div>
                         <div class="caldav-form-group">
-                            <label for="caldav-email">E-Mail *</label>
-                            <input type="email" id="caldav-email" name="email" required />
+                            <label for="caldav-email">E-Mail<?php echo $email_required ? ' *' : ''; ?></label>
+                            <input type="email" id="caldav-email" name="email"<?php echo $email_required ? ' required' : ''; ?> />
                         </div>
                         <div class="caldav-form-group">
-                            <label for="caldav-phone">Telefon</label>
-                            <input type="tel" id="caldav-phone" name="phone" />
+                            <label for="caldav-phone">Telefon<?php echo $phone_required ? ' *' : ''; ?></label>
+                            <input type="tel" id="caldav-phone" name="phone"<?php echo $phone_required ? ' required' : ''; ?> />
                         </div>
                         <div class="caldav-form-group">
-                            <label for="caldav-message">Nachricht</label>
-                            <textarea id="caldav-message" name="message" rows="3"></textarea>
+                            <label for="caldav-message">Nachricht<?php echo $message_required ? ' *' : ''; ?></label>
+                            <textarea id="caldav-message" name="message" rows="3"<?php echo $message_required ? ' required' : ''; ?>></textarea>
                         </div>
                         <div class="caldav-selected-slot"></div>
                         <div class="caldav-form-buttons">
                             <button type="button" class="caldav-back-btn" data-to="2">&laquo; Zurück</button>
-                            <button type="submit" class="caldav-submit-btn">Termin buchen</button>
+                            <button type="submit" class="caldav-submit-btn"<?php echo !empty($options['submit_button_id']) ? ' id="' . esc_attr($options['submit_button_id']) . '"' : ''; ?>>Termin buchen</button>
                         </div>
                     </form>
                 </div>
@@ -883,16 +1058,26 @@ NACHRICHT
     
     public function ajax_book_slot() {
         check_ajax_referer('caldav_booking_nonce', 'nonce');
-        
-        // Rate limiting - max 5 Buchungen pro IP pro Stunde
+
+        $options = get_option('caldav_booking_options', []);
+        $rate_limit_ip = absint($options['rate_limit_ip'] ?? 5);
+        $rate_limit_global = absint($options['rate_limit_global'] ?? 50);
+
+        // Globales Rate-Limit (Schutz gegen verteilte Angriffe)
+        $global_rate_key = 'caldav_global_rate';
+        $global_count = (int) get_transient($global_rate_key);
+        if ($global_count >= $rate_limit_global) {
+            wp_send_json_error(['message' => 'Zu viele Anfragen. Bitte versuchen Sie es später erneut.']);
+        }
+
+        // Rate-Limit pro IP
         $ip = $this->get_client_ip();
         $rate_key = 'caldav_rate_' . md5($ip);
         $rate_count = (int) get_transient($rate_key);
-        
-        if ($rate_count >= 5) {
+        if ($rate_count >= $rate_limit_ip) {
             wp_send_json_error(['message' => 'Zu viele Anfragen. Bitte versuchen Sie es später erneut.']);
         }
-        
+
         // Honeypot check - if filled, it's a bot
         if (!empty($_POST['website'])) {
             // Silently reject but return success to confuse bots
@@ -913,24 +1098,38 @@ NACHRICHT
         $email = sanitize_email($_POST['email'] ?? '');
         $phone = sanitize_text_field($_POST['phone'] ?? '');
         $message = sanitize_textarea_field($_POST['message'] ?? '');
-        
-        // Validierung
-        if (!$date || !$time || !$name || !$email) {
+
+        // Get required fields from settings
+        $required_fields = $options['required_fields'] ?? ['email'];
+
+        // Validierung - Name ist immer Pflicht
+        if (!$date || !$time || !$name) {
             wp_send_json_error(['message' => 'Bitte alle Pflichtfelder ausfüllen']);
         }
-        
+
+        // Check configurable required fields
+        if (in_array('email', $required_fields) && empty($email)) {
+            wp_send_json_error(['message' => 'Bitte E-Mail-Adresse angeben']);
+        }
+        if (in_array('phone', $required_fields) && empty($phone)) {
+            wp_send_json_error(['message' => 'Bitte Telefonnummer angeben']);
+        }
+        if (in_array('message', $required_fields) && empty($message)) {
+            wp_send_json_error(['message' => 'Bitte Nachricht angeben']);
+        }
+
         // Date format validation
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
             wp_send_json_error(['message' => 'Ungültiges Datumsformat']);
         }
-        
+
         // Time format validation
         if (!preg_match('/^\d{2}:\d{2}$/', $time)) {
             wp_send_json_error(['message' => 'Ungültiges Zeitformat']);
         }
-        
-        // Email validation
-        if (!is_email($email)) {
+
+        // Email validation (only if provided)
+        if (!empty($email) && !is_email($email)) {
             wp_send_json_error(['message' => 'Ungültige E-Mail-Adresse']);
         }
         
@@ -941,8 +1140,9 @@ NACHRICHT
         }
         
         // Datum darf nicht in der Vergangenheit liegen
-        $booking_date = new DateTime($date . ' ' . $time, new DateTimeZone(wp_timezone_string()));
-        $now = new DateTime('now', new DateTimeZone(wp_timezone_string()));
+        $cal_tz = $this->get_calendar_timezone();
+        $booking_date = new DateTime($date . ' ' . $time, $cal_tz);
+        $now = new DateTime('now', $cal_tz);
         if ($booking_date < $now) {
             wp_send_json_error(['message' => 'Termine in der Vergangenheit können nicht gebucht werden']);
         }
@@ -974,12 +1174,11 @@ NACHRICHT
         ], 900);
         
         $wpdb->query('COMMIT');
-        
-        // Rate limit erhöhen
+
+        // Rate limits erhöhen
         set_transient($rate_key, $rate_count + 1, HOUR_IN_SECONDS);
-        
-        $options = get_option('caldav_booking_options', []);
-        $tz = new DateTimeZone(wp_timezone_string());
+        set_transient($global_rate_key, $global_count + 1, HOUR_IN_SECONDS);
+        $tz = $this->get_calendar_timezone();
         $start = new DateTime($date . ' ' . $time, $tz);
         $end = clone $start;
         $end->modify("+{$duration} minutes");
@@ -1005,23 +1204,154 @@ NACHRICHT
         ];
         
         // Cache für dieses Datum invalidieren
-        $cache_key = 'caldav_events_' . md5(($options['caldav_url'] ?? '') . $date);
+        $base_url = rtrim($options['caldav_url'] ?? '', '/');
+        $username = $options['caldav_username'] ?? '';
+        $calendar_path = trim($options['caldav_calendar'] ?? 'Calendar/personal/', '/');
+        $calendar_url = $base_url . '/' . $username . '/' . $calendar_path . '/';
+        $cache_key = 'caldav_events_' . md5($calendar_url . $date);
         delete_transient($cache_key);
         
         // In Datenbank speichern
         $this->save_booking($booking_data);
-        
-        // Cron für E-Mail UND CalDAV planen
-        wp_schedule_single_event(time(), 'caldav_process_booking', [$booking_id]);
-        
-        // SOFORT Response senden
-        wp_send_json_success([
-            'message' => 'Termin erfolgreich gebucht!',
-            'date' => $start->format('d.m.Y'),
-            'time' => $start->format('H:i') . ' - ' . $end->format('H:i'),
-            'type' => $meeting_type,
-            'booking_id' => $booking_id
-        ]);
+
+        $debug_mode = !empty($options['console_debug']);
+        $async_mode = !empty($options['async_processing']) && !$debug_mode;
+
+        if ($debug_mode) {
+            // DEBUG: Synchron verarbeiten und alles loggen
+            $debug_log = [];
+            $debug_log[] = ['step' => 'booking_saved', 'booking_id' => $booking_id];
+
+            $result = $this->process_booking_with_debug($booking_id, $debug_log);
+
+            wp_send_json_success([
+                'message' => 'Termin erfolgreich gebucht!',
+                'date' => $start->format('d.m.Y'),
+                'time' => $start->format('H:i') . ' - ' . $end->format('H:i'),
+                'type' => $meeting_type,
+                'booking_id' => $booking_id,
+                'debug' => $debug_log,
+                'caldav_result' => $result
+            ]);
+        } elseif ($async_mode) {
+            // ASYNC: Antwort sofort senden, im Hintergrund verarbeiten
+            ignore_user_abort(true);
+            $response = wp_json_encode([
+                'success' => true,
+                'data' => [
+                    'message' => 'Termin erfolgreich gebucht!',
+                    'date' => $start->format('d.m.Y'),
+                    'time' => $start->format('H:i') . ' - ' . $end->format('H:i'),
+                    'type' => $meeting_type,
+                    'booking_id' => $booking_id
+                ]
+            ]);
+
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Length: ' . strlen($response));
+            echo $response;
+
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            } else {
+                flush();
+                if (function_exists('ob_flush')) {
+                    ob_flush();
+                }
+            }
+
+            $this->process_booking_async($booking_id);
+            exit;
+        } else {
+            // SYNC: Synchron verarbeiten ohne Debug-Logging
+            $this->process_booking_async($booking_id);
+
+            wp_send_json_success([
+                'message' => 'Termin erfolgreich gebucht!',
+                'date' => $start->format('d.m.Y'),
+                'time' => $start->format('H:i') . ' - ' . $end->format('H:i'),
+                'type' => $meeting_type,
+                'booking_id' => $booking_id
+            ]);
+        }
+    }
+
+    public function debug_file_log($message) {
+        $log_file = WP_CONTENT_DIR . '/caldav-debug.log';
+        $timestamp = date('Y-m-d H:i:s');
+        file_put_contents($log_file, "[$timestamp] $message\n", FILE_APPEND | LOCK_EX);
+    }
+
+    private function process_booking_with_debug($booking_id, &$debug_log) {
+        $this->debug_file_log("=== START process_booking_with_debug: $booking_id ===");
+
+        $booking = $this->get_booking($booking_id);
+
+        if (!$booking || $booking['status'] !== 'pending') {
+            $this->debug_file_log("ERROR: Booking not found or not pending");
+            $debug_log[] = ['step' => 'error', 'message' => 'Booking not found or not pending', 'status' => $booking['status'] ?? 'null'];
+            return ['success' => false, 'error' => 'Booking not found'];
+        }
+
+        $this->debug_file_log("Booking loaded: " . $booking['name']);
+        $debug_log[] = ['step' => 'booking_loaded', 'data' => $booking];
+
+        // E-Mail senden
+        if (empty($booking['email_sent'])) {
+            $this->debug_file_log("Sending email to: " . $booking['email']);
+            $debug_log[] = ['step' => 'sending_email', 'to' => $booking['email']];
+            $email_result = $this->send_customer_confirmation($booking);
+            $this->debug_file_log("Email result: " . ($email_result ? 'success' : 'failed'));
+            $debug_log[] = ['step' => 'email_sent', 'result' => $email_result];
+            $this->update_booking_status($booking_id, 'pending', ['email_sent' => true]);
+        }
+
+        $options = get_option('caldav_booking_options', []);
+        $tz = $this->get_calendar_timezone();
+
+        $start = new DateTime($booking['start'], $tz);
+        $end = new DateTime($booking['end'], $tz);
+
+        $event_data = [
+            'summary' => $booking['meeting_type'] . ': ' . $booking['name'],
+            'description' => "Terminart: {$booking['meeting_type']}\nName: {$booking['name']}\nE-Mail: {$booking['email']}\nTelefon: {$booking['phone']}\n\nNachricht:\n{$booking['message']}",
+            'start' => $start,
+            'end' => $end,
+            'attendee_email' => $booking['email'],
+            'attendee_name' => $booking['name']
+        ];
+
+        $debug_log[] = ['step' => 'caldav_event_data', 'data' => [
+            'summary' => $event_data['summary'],
+            'start' => $start->format('Y-m-d H:i:s'),
+            'end' => $end->format('Y-m-d H:i:s')
+        ]];
+
+        $this->debug_file_log("CalDAV URL: " . ($options['caldav_url'] ?? 'not set'));
+        $this->debug_file_log("CalDAV User: " . ($options['caldav_username'] ?? 'not set'));
+        $debug_log[] = ['step' => 'caldav_connecting', 'url' => $options['caldav_url'] ?? '', 'user' => $options['caldav_username'] ?? ''];
+
+        $caldav = new CalDAV_Client($options);
+        $caldav->set_debug_log($debug_log);
+        $caldav->set_file_logger([$this, 'debug_file_log']);
+
+        $this->debug_file_log("Calling create_event...");
+        $result = $caldav->create_event($event_data);
+        $this->debug_file_log("create_event returned");
+
+        if (is_wp_error($result)) {
+            $error_msg = $result->get_error_message();
+            $debug_log[] = ['step' => 'caldav_error', 'error' => $error_msg];
+            $this->update_booking_status($booking_id, 'failed', ['error' => $error_msg]);
+            $this->send_admin_error_notification($booking, $error_msg);
+            return ['success' => false, 'error' => $error_msg];
+        } else {
+            $debug_log[] = ['step' => 'caldav_success', 'uid' => $result['uid']];
+            $this->update_booking_status($booking_id, 'completed', ['uid' => $result['uid']]);
+            delete_transient($booking['slot_key']);
+            $this->send_admin_notification($booking);
+            return ['success' => true, 'uid' => $result['uid']];
+        }
     }
     
     private function get_client_ip() {
@@ -1099,11 +1429,11 @@ NACHRICHT
         }
         
         $options = get_option('caldav_booking_options', []);
-        $tz = new DateTimeZone(wp_timezone_string());
-        
+        $tz = $this->get_calendar_timezone();
+
         $start = new DateTime($booking['start'], $tz);
         $end = new DateTime($booking['end'], $tz);
-        
+
         $event_data = [
             'summary' => $booking['meeting_type'] . ': ' . $booking['name'],
             'description' => "Terminart: {$booking['meeting_type']}\nName: {$booking['name']}\nE-Mail: {$booking['email']}\nTelefon: {$booking['phone']}\n\nNachricht:\n{$booking['message']}",
@@ -1112,7 +1442,7 @@ NACHRICHT
             'attendee_email' => $booking['email'],
             'attendee_name' => $booking['name']
         ];
-        
+
         $caldav = new CalDAV_Client($options);
         $result = $caldav->create_event($event_data);
         
@@ -1561,50 +1891,97 @@ NACHRICHT
 }
 
 class CalDAV_Client {
-    
+
     private $base_url;
     private $username;
     private $password;
     private $calendar_path;
-    
+    private $calendar_url;
+    private $debug_log = null;
+    private $file_logger = null;
+
     public function __construct($options) {
         $this->base_url = rtrim($options['caldav_url'] ?? '', '/');
         $this->username = $options['caldav_username'] ?? '';
         $this->password = $options['caldav_password'] ?? '';
         $this->calendar_path = trim($options['caldav_calendar'] ?? 'Calendar/personal/', '/');
+        $this->calendar_url = $this->base_url . '/' . $this->username . '/' . $this->calendar_path . '/';
+    }
+
+    public function set_debug_log(&$log) {
+        $this->debug_log = &$log;
+    }
+
+    public function set_file_logger($callback) {
+        $this->file_logger = $callback;
+    }
+
+    private function file_log($message) {
+        if ($this->file_logger !== null) {
+            call_user_func($this->file_logger, "[CalDAV_Client] $message");
+        }
+    }
+
+    private function log_debug($step, $data = null) {
+        if ($this->debug_log !== null) {
+            $entry = ['step' => $step, 'time' => microtime(true)];
+            if ($data !== null) {
+                $entry['data'] = $data;
+            }
+            $this->debug_log[] = $entry;
+        }
     }
     
     private function get_calendar_url() {
-        return $this->base_url . '/' . $this->username . '/' . $this->calendar_path . '/';
+        return $this->calendar_url;
     }
     
     private function request($method, $url, $body = null, $headers = []) {
+        $this->log_debug('request_start', ['method' => $method, 'url' => $url]);
+        $this->file_log("REQUEST START: $method $url");
+
         $default_headers = [
             'Content-Type' => 'application/xml; charset=utf-8',
             'Authorization' => 'Basic ' . base64_encode($this->username . ':' . $this->password)
         ];
-        
+
         $headers = array_merge($default_headers, $headers);
-        
+
         $args = [
             'method' => $method,
             'headers' => $headers,
             'timeout' => 45,
             'sslverify' => true
         ];
-        
+
         if ($body) {
             $args['body'] = $body;
+            $this->log_debug('request_body_size', strlen($body));
+            $this->file_log("Body size: " . strlen($body) . " bytes");
         }
-        
+
+        $this->log_debug('request_sending');
+        $this->file_log("Sending request...");
+        $start_time = microtime(true);
         $response = wp_remote_request($url, $args);
-        
+        $elapsed = round((microtime(true) - $start_time) * 1000);
+        $this->log_debug('request_complete', ['elapsed_ms' => $elapsed]);
+        $this->file_log("Request completed in {$elapsed}ms");
+
         if (is_wp_error($response)) {
+            $error_msg = $response->get_error_message();
+            $this->log_debug('request_error', $error_msg);
+            $this->file_log("REQUEST ERROR: $error_msg");
             return $response;
         }
-        
+
+        $code = wp_remote_retrieve_response_code($response);
+        $body_size = strlen(wp_remote_retrieve_body($response));
+        $this->log_debug('request_response', ['code' => $code, 'body_size' => $body_size]);
+        $this->file_log("RESPONSE: HTTP $code, body size: $body_size");
+
         return [
-            'code' => wp_remote_retrieve_response_code($response),
+            'code' => $code,
             'body' => wp_remote_retrieve_body($response),
             'headers' => wp_remote_retrieve_headers($response)
         ];
@@ -1860,33 +2237,66 @@ class CalDAV_Client {
     }
     
     public function create_event($event_data) {
+        $this->log_debug('create_event_start');
+        $this->file_log("=== CREATE EVENT START ===");
+
         $uid = wp_generate_uuid4();
+        $this->log_debug('create_event_uid', $uid);
+        $this->file_log("Generated UID: $uid");
+
         $now = new DateTime('now', new DateTimeZone('UTC'));
         $tz_name = $event_data['start']->getTimezone()->getName();
-        
-        // Zeiten in lokaler Timezone behalten (nicht nach UTC konvertieren)
-        $start = $event_data['start'];
-        $end = $event_data['end'];
-        
+        $this->log_debug('create_event_timezone', $tz_name);
+        $this->file_log("Timezone: $tz_name");
+
+        // Check if timezone is an offset format (like +00:00, +01:00, etc.)
+        // These are not valid TZID values, so we use UTC instead
+        $use_utc = preg_match('/^[+-]\d{2}:\d{2}$/', $tz_name) || $tz_name === 'UTC';
+        $this->file_log("Use UTC format: " . ($use_utc ? 'yes' : 'no'));
+
+        $start = clone $event_data['start'];
+        $end = clone $event_data['end'];
+
+        if ($use_utc) {
+            // Convert to UTC for offset-based timezones
+            $start->setTimezone(new DateTimeZone('UTC'));
+            $end->setTimezone(new DateTimeZone('UTC'));
+        }
+
         $ical = "BEGIN:VCALENDAR\r\n";
         $ical .= "VERSION:2.0\r\n";
         $ical .= "PRODID:-//CalDAV Booking//WordPress Plugin//DE\r\n";
-        
-        // VTIMEZONE Definition hinzufügen
-        $ical .= "BEGIN:VTIMEZONE\r\n";
-        $ical .= "TZID:" . $tz_name . "\r\n";
-        $ical .= "END:VTIMEZONE\r\n";
+
+        if (!$use_utc) {
+            // Only add VTIMEZONE for named timezones
+            $ical .= "BEGIN:VTIMEZONE\r\n";
+            $ical .= "TZID:" . $tz_name . "\r\n";
+            $ical .= "END:VTIMEZONE\r\n";
+        }
         
         $ical .= "BEGIN:VEVENT\r\n";
         $ical .= "UID:" . $uid . "\r\n";
         $ical .= "DTSTAMP:" . $now->format('Ymd\THis\Z') . "\r\n";
-        $ical .= "DTSTART;TZID=" . $tz_name . ":" . $start->format('Ymd\THis') . "\r\n";
-        $ical .= "DTEND;TZID=" . $tz_name . ":" . $end->format('Ymd\THis') . "\r\n";
+        if ($use_utc) {
+            // UTC format with Z suffix
+            $ical .= "DTSTART:" . $start->format('Ymd\THis\Z') . "\r\n";
+            $ical .= "DTEND:" . $end->format('Ymd\THis\Z') . "\r\n";
+            $this->file_log("DTSTART: " . $start->format('Ymd\THis\Z'));
+            $this->file_log("DTEND: " . $end->format('Ymd\THis\Z'));
+        } else {
+            // Named timezone format
+            $ical .= "DTSTART;TZID=" . $tz_name . ":" . $start->format('Ymd\THis') . "\r\n";
+            $ical .= "DTEND;TZID=" . $tz_name . ":" . $end->format('Ymd\THis') . "\r\n";
+            $this->file_log("DTSTART: " . $start->format('Ymd\THis') . " (TZID: $tz_name)");
+            $this->file_log("DTEND: " . $end->format('Ymd\THis') . " (TZID: $tz_name)");
+        }
         $ical .= "SUMMARY:" . $this->escape_ical_text($event_data['summary']) . "\r\n";
         $ical .= "DESCRIPTION:" . $this->escape_ical_text($event_data['description']) . "\r\n";
         
         if (!empty($event_data['attendee_email'])) {
-            $ical .= "ATTENDEE;RSVP=TRUE;CN=" . $this->escape_ical_text($event_data['attendee_name']) . ";PARTSTAT=NEEDS-ACTION:mailto:" . $event_data['attendee_email'] . "\r\n";
+            // Quote CN value to handle special characters (colons, semicolons, etc.)
+            $cn_escaped = str_replace('"', '\\"', $event_data['attendee_name']);
+            $ical .= "ATTENDEE;RSVP=TRUE;CN=\"" . $cn_escaped . "\";PARTSTAT=NEEDS-ACTION:mailto:" . $event_data['attendee_email'] . "\r\n";
         }
         
         $ical .= "STATUS:CONFIRMED\r\n";
@@ -1896,20 +2306,29 @@ class CalDAV_Client {
         $ical .= "END:VCALENDAR\r\n";
         
         $url = $this->get_calendar_url() . $uid . '.ics';
-        
+        $this->log_debug('create_event_url', $url);
+        $this->log_debug('create_event_ical_size', strlen($ical));
+        $this->file_log("PUT URL: $url");
+        $this->file_log("iCal size: " . strlen($ical) . " bytes");
+
         $response = $this->request('PUT', $url, $ical, [
             'Content-Type' => 'text/calendar; charset=utf-8',
             'If-None-Match' => '*'
         ]);
-        
+
         if (is_wp_error($response)) {
+            $this->file_log("CREATE EVENT ERROR: " . $response->get_error_message());
             return $response;
         }
-        
+
+        $this->file_log("CREATE EVENT RESPONSE CODE: " . $response['code']);
+
         if ($response['code'] === 201 || $response['code'] === 204) {
+            $this->file_log("CREATE EVENT SUCCESS");
             return ['success' => true, 'uid' => $uid];
         }
-        
+
+        $this->file_log("CREATE EVENT FAILED: HTTP " . $response['code']);
         return new WP_Error('caldav_error', 'Fehler: HTTP ' . $response['code']);
     }
     

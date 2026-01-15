@@ -1,6 +1,6 @@
 # CalDAV Booking Plugin for WordPress
 
-[![CI/CD](https://github.com/YOUR_USERNAME/caldav-booking-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/caldav-booking-plugin/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/SKAWINSKI-GmbH/wordpress-caldav_booking_plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/SKAWINSKI-GmbH/wordpress-caldav_booking_plugin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![WordPress](https://img.shields.io/badge/WordPress-5.0%2B-blue.svg)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-purple.svg)](https://php.net/)
@@ -30,7 +30,7 @@ A WordPress plugin for appointment booking with CalDAV synchronization. Compatib
 
 ### From GitHub Release
 
-1. Download the latest release ZIP from [Releases](https://github.com/YOUR_USERNAME/caldav-booking-plugin/releases)
+1. Download the latest release ZIP from [Releases](https://github.com/SKAWINSKI-GmbH/wordpress-caldav_booking_plugin/releases)
 2. In WordPress Admin, go to **Plugins → Add New → Upload Plugin**
 3. Select the downloaded ZIP file and click **Install Now**
 4. Activate the plugin
@@ -131,7 +131,7 @@ Add the booking form to any page or post:
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/caldav-booking-plugin.git
+git clone https://github.com/SKAWINSKI-GmbH/wordpress-caldav_booking_plugin.git
 
 # Install development dependencies (optional)
 composer install
@@ -240,13 +240,15 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/YOUR_USERNAME/caldav-booking-plugin/issues)
-- **Documentation**: [Wiki](https://github.com/YOUR_USERNAME/caldav-booking-plugin/wiki)
+This plugin is provided **as-is** on a **best-effort basis**. 
+
+- **Issues**: [GitHub Issues](https://github.com/SKAWINSKI-GmbH/wordpress-caldav_booking_plugin/issues)
+- **Response Time**: No guaranteed response time - issues are addressed as time permits
+- **Commercial Support**: For priority support or custom development, contact [SKAWINSKI GmbH](https://skawinski.at/kontakt/)
+
+> ⚠️ **Note**: This is an open-source project maintained in spare time. Please check existing issues and documentation before opening new issues.
+
 
 ## 🙏 Credits
 
 Developed by [SKAWINSKI GmbH](https://skawinski.at)
-
----
-
-**Note:** Replace `YOUR_USERNAME` with your actual GitHub username in the badge URLs and links.
