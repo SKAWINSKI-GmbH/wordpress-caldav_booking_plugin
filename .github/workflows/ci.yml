@@ -127,7 +127,7 @@ jobs:
       - name: Check required files
         run: |
           echo "Checking required files..."
-          files=("caldav-booking.php" "README.md" "LICENSE" "assets/booking.js" "assets/booking.css")
+          files=("caldav-booking.php" "README.md" "LICENSE" "readme.txt" "assets/booking.js" "assets/booking.css")
           for file in "${files[@]}"; do
             if [ -f "$file" ]; then
               echo "✅ $file exists"
@@ -162,7 +162,7 @@ jobs:
       - name: Create plugin directory
         run: |
           mkdir -p build/caldav-booking-plugin
-          cp -r caldav-booking.php README.md LICENSE assets build/caldav-booking-plugin/
+          cp -r caldav-booking.php README.md LICENSE readme.txt assets build/caldav-booking-plugin/
       
       - name: Create ZIP archive
         run: |
