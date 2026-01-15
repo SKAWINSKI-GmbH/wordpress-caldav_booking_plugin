@@ -3,7 +3,7 @@
  * Plugin Name: CalDAV Booking
  * Plugin URI: https://github.com/skawinski/caldav-booking-plugin
  * Description: Terminbuchung mit CalDAV-Synchronisation (SOGo/Mailcow kompatibel) - Nur explizit freigegebene Slots buchbar
- * Version: 0.2
+ * Version: 0.2.1
  * Author: SKAWINSKI GmbH
  * Author URI: https://skawinski.at
  * License: MIT
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('CALDAV_BOOKING_VERSION', '0.2');
+define('CALDAV_BOOKING_VERSION', '0.2.1');
 define('CALDAV_BOOKING_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CALDAV_BOOKING_PLUGIN_URL', plugin_dir_url(__FILE__));
 
